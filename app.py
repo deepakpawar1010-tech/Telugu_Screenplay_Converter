@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 
 # Project modules
 from screenplay_parser import parse_screenplay_text, BlockType, ScreenplayBlock
-from translator import convert_block, translate_action
+from translator import convert_block, translate_action, batch_convert_screenplay
 from transliterator import transliterate_dialogue, transliterate_parenthetical
 from quality_checker import ScreenplayQualityChecker
 from extractor import extract_screenplay_blocks, extract_text_from_docx, extract_text_from_pdf
@@ -406,8 +406,8 @@ with st.sidebar:
         model_choice = st.selectbox(
             "Gemini Model:",
             options=[
-                "gemini-flash-lite-latest",
                 "gemini-3.5-flash-lite",
+                "gemini-flash-lite-latest",
                 "gemini-3.1-flash-lite",
                 "gemini-flash-latest"
             ],
@@ -489,16 +489,22 @@ if nav_option == "⚡ 50:50 Live Split Screenwriter":
                 blocks = parse_screenplay_text(st.session_state.live_english)
                 progress_bar = st.progress(0, text="Analyzing and converting screenplay elements...")
 
-                converted_list = []
-                total = len(blocks)
-                for idx, b in enumerate(blocks):
-                    progress_bar.progress((idx + 1) / total, text=f"Converting #{idx+1}/{total}: {b.type.value}...")
-                    c_text = convert_block(b, client=client, model_name=model_choice)
-                    converted_list.append((b, c_text))
+                def update_live_progress(current, total, msg):
+                    progress_bar.progress(current / max(total, 1), text=msg)
+
+                start_time = time.time()
+                converted_list = batch_convert_screenplay(
+                    blocks,
+                    client=client,
+                    model_name=model_choice,
+                    batch_size=15,
+                    progress_callback=update_live_progress
+                )
+                elapsed = time.time() - start_time
 
                 progress_bar.empty()
                 st.session_state.live_converted = converted_list
-                st.success(f"Conversion complete! Converted {len(converted_list)} blocks.")
+                st.success(f"Conversion complete! Converted {len(converted_list)} blocks in {elapsed:.1f}s.")
 
         # Render preview
         html_view = render_html_screenplay(st.session_state.live_converted, is_light=is_light_mode)
@@ -583,19 +589,20 @@ elif nav_option == "📁 Upload & Convert Script (.docx / .pdf)":
                 progress_bar = st.progress(0, text="Translating screenplay blocks...")
                 status_placeholder = st.empty()
 
-                converted_results = []
-                total = len(blocks)
+                def update_batch_progress(current, total, msg):
+                    progress_bar.progress(current / max(total, 1))
+                    status_placeholder.markdown(f"**Progress ({current}/{total})**: *{msg}*")
+
                 start_time = time.time()
-
-                for idx, b in enumerate(blocks):
-                    progress_pct = (idx + 1) / total
-                    status_placeholder.markdown(f"**Converting element {idx+1}/{total}**: `{b.type.value}` - *{b.text[:50]}...*")
-                    progress_bar.progress(progress_pct)
-
-                    c_text = convert_block(b, client=client, model_name=model_choice)
-                    converted_results.append((b, c_text))
-
+                converted_results = batch_convert_screenplay(
+                    blocks,
+                    client=client,
+                    model_name=model_choice,
+                    batch_size=20,
+                    progress_callback=update_batch_progress
+                )
                 elapsed = time.time() - start_time
+
                 progress_bar.empty()
                 status_placeholder.empty()
                 st.success(f"Screenplay converted successfully! {len(converted_results)} blocks in {elapsed:.1f}s.")
